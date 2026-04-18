@@ -21,6 +21,12 @@ const inputSchema = {
       "XBRL axis dimension name, e.g. \"ProductOrServiceAxis\", \"StatementBusinessSegmentsAxis\", \"GeographicAreasAxis\". " +
       "Only companies that explicitly tag segment data in XBRL will return results.",
     ),
+  period: z
+    .string().optional()
+    .describe(
+      "Period filter. Supports \"last_4_quarters\" (default), \"last_8_quarters\", \"last_12_quarters\", \"all\", " +
+      "or an exact label like \"FY2023\" or \"Q3 FY2024\".",
+    ),
 };
 
 const outputSchema = {
@@ -76,7 +82,7 @@ export const getSegmentFactsTool: McpTool<typeof inputSchema, typeof outputSchem
       const cik = await resolveCikFromTicker(ticker);
 
       const result: SegmentToolOutput = await withTimeout(
-        extractSegmentFacts(cik, ticker, args.concept, args.segment_dimension),
+        extractSegmentFacts(cik, ticker, args.concept, args.segment_dimension, args.period ?? "last_4_quarters"),
         15_000,
       );
 

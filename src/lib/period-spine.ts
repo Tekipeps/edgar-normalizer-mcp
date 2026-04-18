@@ -118,3 +118,32 @@ export function filterByPeriodSpec(facts: EdgarFact[], periodSpec: PeriodFilter)
   // Exact period label match (e.g., "FY2023", "Q3 FY2024")
   return facts.filter((f) => f.period_label === periodSpec);
 }
+
+/**
+ * Like filterByPeriodSpec but preserves ALL facts per included period label.
+ * Used for segment data where a single period has one fact per segment member.
+ */
+export function filterMultiByPeriodSpec<T extends EdgarFact>(facts: T[], periodSpec: PeriodFilter): T[] {
+  if (periodSpec === "all") return facts;
+
+  const quarterMatch = periodSpec.match(/^last_(\d+)_quarters$/);
+  if (quarterMatch) {
+    const n = parseInt(quarterMatch[1] ?? "4", 10);
+    const quarterly = facts.filter((f) => /^Q[1-4] FY\d{4}$/.test(f.period_label));
+    const sorted = [...quarterly].sort(
+      (a, b) => new Date(b.end_date).getTime() - new Date(a.end_date).getTime(),
+    );
+    const kept = new Set<string>();
+    for (const f of sorted) {
+      if (!kept.has(f.period_label)) {
+        kept.add(f.period_label);
+        if (kept.size === n) break;
+      }
+    }
+    return facts
+      .filter((f) => kept.has(f.period_label))
+      .sort((a, b) => new Date(a.end_date).getTime() - new Date(b.end_date).getTime());
+  }
+
+  return facts.filter((f) => f.period_label === periodSpec);
+}

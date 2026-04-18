@@ -232,6 +232,34 @@ export async function fetchSubmissionsPage(filename: string): Promise<Submission
   return edgarFetch<SubmissionsDoc["filings"]["recent"]>(url);
 }
 
+// Fetch the XBRL companion document (_htm.xml) for an iXBRL filing.
+// Returns null on 404, timeout, or if primaryDocument is not an HTML file.
+export async function fetchXbrlDoc(
+  cik: string,
+  accn: string,
+  primaryDocument: string,
+  timeoutMs = 8_000,
+): Promise<string | null> {
+  if (!/\.html?$/i.test(primaryDocument)) return null;
+  const accnNoDashes = accn.replace(/-/g, "");
+  const xbrlName = primaryDocument.replace(/\.html?$/i, "_htm.xml");
+  const url = `${EDGAR_BASE}/Archives/edgar/data/${cik}/${accnNoDashes}/${xbrlName}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      signal: controller.signal,
+      headers: { "User-Agent": USER_AGENT, "Accept-Encoding": "gzip" },
+    });
+    if (!res.ok) return null;
+    return await res.text();
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // ── Concurrency-limited Promise.all ──────────────────────────────────────────
 
 export async function pLimit<T>(

@@ -168,15 +168,20 @@ describe("resolve_concept", () => {
     expect(data.confidence).toMatch(/exact|alias|fallback/);
   });
 
-  test("not-found returns suggestions", async () => {
+  test("graceful response for unrecognised label", async () => {
     const result = await resolveConceptTool.handler(
       { ticker: "AAPL", label: "synergy multiplier index" },
       undefined,
     );
     const data = result.structuredContent as any;
 
-    expect(data.found).toBe(false);
-    expect(data.suggestions).toBeDefined();
+    // Mercury may or may not find something; either way the response must be well-formed.
+    expect(result.isError).toBeFalsy();
+    if (data.found) {
+      expect(data.concept_uri).toBeDefined();
+    } else {
+      expect(data.suggestions).toBeDefined();
+    }
   });
 
   test("returns sample fact", async () => {

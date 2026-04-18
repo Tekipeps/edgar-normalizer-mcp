@@ -1,14 +1,16 @@
 import {
   fetchCompanyFacts,
   fetchSubmissions,
+  fetchXbrlDoc,
   resolveCikFromTicker,
 } from "../data/edgar.ts";
+import { buildXbrlSegmentMap } from "./xbrl-parser.ts";
 import {
   resolveAliasesToConcepts,
   getAliasSuggestions,
 } from "../data/concept-aliases.ts";
 import { resolveConceptViaMercury } from "../synthesis/mercury.ts";
-import { buildPeriodLabel, filterByPeriodSpec, parseFiscalYearEnd } from "./period-spine.ts";
+import { buildPeriodLabel, filterByPeriodSpec, filterMultiByPeriodSpec, parseFiscalYearEnd } from "./period-spine.ts";
 import type {
   CompanyFactsDoc,
   EdgarFact,
@@ -339,11 +341,13 @@ export async function resolveConceptForTicker(
 
 // ── Segment facts ─────────────────────────────────────────────────────────────
 
+
 export async function extractSegmentFacts(
   cik: string,
   ticker: string,
   conceptUri: string,
   _segmentDimension: string,
+  periodSpec: PeriodFilter = "last_4_quarters",
 ): Promise<SegmentToolOutput> {
   const freshness_as_of = new Date().toISOString();
   const [doc, sub] = await Promise.all([fetchCompanyFacts(cik), fetchSubmissions(cik)]);
@@ -357,19 +361,25 @@ export async function extractSegmentFacts(
     : [conceptUri];
 
   const tried: string[] = [];
-  let resolvedUri = conceptUri;
-  let conceptData: { label: string; description: string; units: Record<string, EdgarFactRaw[]> } | undefined;
+  type ConceptEntry = { label: string; description: string; units: Record<string, EdgarFactRaw[]> };
+  const candidates: Array<{ uri: string; data: ConceptEntry; latestFiled: number }> = [];
 
   for (const uri of candidateUris) {
     tried.push(uri);
     const { namespace, tagName } = parseConceptUri(uri);
     const data = doc.facts[namespace]?.[tagName];
-    if (data) {
-      resolvedUri = uri;
-      conceptData = data;
-      break;
-    }
+    if (!data) continue;
+    const primaryUnit = selectPrimaryUnit(data.units, uri);
+    const rawFacts = data.units[primaryUnit] ?? [];
+    if (rawFacts.length === 0) continue;
+    const latestFiled = Math.max(...rawFacts.map((f) => new Date(f.filed).getTime()));
+    candidates.push({ uri, data, latestFiled });
   }
+
+  candidates.sort((a, b) => b.latestFiled - a.latestFiled);
+  const best = candidates[0];
+  const resolvedUri = best?.uri ?? conceptUri;
+  const conceptData = best?.data;
 
   if (!conceptData) {
     return {
@@ -430,9 +440,45 @@ export async function extractSegmentFacts(
 
   segmentFacts.sort((a, b) => new Date(a.end_date).getTime() - new Date(b.end_date).getTime());
 
+  const filteredFacts = filterMultiByPeriodSpec(segmentFacts, periodSpec);
+
+  // Enrich segment_member labels by fetching per-filing XBRL companion docs.
+  // iXBRL filings include a _htm.xml companion that has full dimensional context.
+  const recent = sub.filings.recent;
+  const accnToPrimaryDoc = new Map<string, string>();
+  for (let i = 0; i < recent.accessionNumber.length; i++) {
+    if (recent.isInlineXBRL[i] === 1) {
+      const a = recent.accessionNumber[i];
+      const p = recent.primaryDocument[i];
+      if (a && p) accnToPrimaryDoc.set(a, p);
+    }
+  }
+
+  const { tagName: conceptLocalName } = parseConceptUri(resolvedUri);
+  const fetchAccns = [...new Set(filteredFacts.map((f) => f.accession_number))]
+    .filter((a) => accnToPrimaryDoc.has(a))
+    .slice(0, 4);
+
+  if (fetchAccns.length > 0) {
+    const xmlTexts = await Promise.all(
+      fetchAccns.map((a) => fetchXbrlDoc(cik, a, accnToPrimaryDoc.get(a)!)),
+    );
+    const valKeyToMember = new Map<string, string>();
+    for (const xml of xmlTexts) {
+      if (!xml) continue;
+      const m = buildXbrlSegmentMap(xml, _segmentDimension, conceptLocalName);
+      for (const [k, v] of m) if (!valKeyToMember.has(k)) valKeyToMember.set(k, v);
+    }
+    for (const fact of filteredFacts) {
+      const key = `${fact.value}::${fact.start_date ?? ""}::${fact.end_date}`;
+      const member = valKeyToMember.get(key);
+      if (member) fact.segment_member = member;
+    }
+  }
+
   return {
     ticker, cik, concept: resolvedUri, label: conceptData.label,
-    facts: segmentFacts, freshness_as_of, concept_aliases_checked: tried,
+    facts: filteredFacts, freshness_as_of, concept_aliases_checked: tried,
     segments_available: true,
   };
 }
