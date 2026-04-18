@@ -4,3 +4,4 @@ CLAUDE.md
 *.tsbuildinfo
 
 .claude/
+temp/

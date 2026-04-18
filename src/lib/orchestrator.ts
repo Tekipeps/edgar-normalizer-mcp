@@ -177,9 +177,18 @@ export async function normalizeConceptFacts(
 
   const filtered = filterByPeriodSpec(allFacts, periodSpec);
 
+  // Warn if the most recent fact is over 2 years old — company may have switched concepts
+  const latestFact = allFacts[allFacts.length - 1];
+  const twoYearsAgo = Date.now() - 2 * 365.25 * 24 * 3600 * 1000;
+  const staleness_warning =
+    latestFact && new Date(latestFact.filed_date).getTime() < twoYearsAgo
+      ? `Most recent data for "${conceptUri}" is from ${latestFact.filed_date}. The company may have adopted a different XBRL concept (e.g. RevenueFromContractWithCustomerExcludingAssessedTax replaced Revenues after ASC 606).`
+      : undefined;
+
   return {
     ticker, cik, concept: conceptUri, label: conceptLabel,
     facts: filtered, freshness_as_of, concept_aliases_checked: [conceptUri],
+    ...(staleness_warning ? { staleness_warning } : {}),
   };
 }
 
@@ -208,14 +217,25 @@ export async function normalizeWithAliasResolution(
   const doc = prefetchedDoc ?? await fetchCompanyFacts(cik);
   const tried: string[] = [];
 
+  // Collect all candidates with data, then pick the one with the most recent filing
+  const candidates: Array<{ conceptUri: string; latestFiled: number }> = [];
   for (const conceptUri of concepts) {
     tried.push(conceptUri);
     const { namespace, tagName } = parseConceptUri(conceptUri);
-    const hasData = !!doc.facts[namespace]?.[tagName];
-    if (hasData) {
-      const result = await normalizeConceptFacts(cik, ticker, conceptUri, periodSpec, doc);
-      return { ...result, concept_aliases_checked: tried };
-    }
+    const conceptData = doc.facts[namespace]?.[tagName];
+    if (!conceptData) continue;
+    const primaryUnit = selectPrimaryUnit(conceptData.units, conceptUri);
+    const rawFacts = conceptData.units[primaryUnit] ?? [];
+    if (rawFacts.length === 0) continue;
+    const latestFiled = Math.max(...rawFacts.map((f) => new Date(f.filed).getTime()));
+    candidates.push({ conceptUri, latestFiled });
+  }
+
+  if (candidates.length > 0) {
+    candidates.sort((a, b) => b.latestFiled - a.latestFiled);
+    const best = candidates[0]!;
+    const result = await normalizeConceptFacts(cik, ticker, best.conceptUri, periodSpec, doc);
+    return { ...result, concept_aliases_checked: tried };
   }
 
   // None found

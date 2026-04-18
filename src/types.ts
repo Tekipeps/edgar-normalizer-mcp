@@ -99,6 +99,7 @@ export interface ToolOutput<T = EdgarFact> {
   concept_aliases_checked: string[];
   isError?:                boolean;
   error_message?:          string;
+  staleness_warning?:      string;
 }
 
 export interface SegmentToolOutput extends ToolOutput<SegmentFact> {
