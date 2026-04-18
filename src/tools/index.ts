@@ -10,6 +10,9 @@ import { resolveConceptTool } from "./resolve-concept.ts";
 import { getFilingMetadataTool } from "./get-filing-metadata.ts";
 import { getSegmentFactsTool } from "./get-segment-facts.ts";
 import { resolveTickerTool } from "./resolve-ticker.ts";
+import { comparePeriodsTool } from "./compare-periods.ts";
+import { discoverXbrlConceptsTool } from "./discover-xbrl-concepts.ts";
+import { getFilingContentTool } from "./get-filing-content.ts";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const tools: McpTool<any, any>[] = [
@@ -19,6 +22,9 @@ export const tools: McpTool<any, any>[] = [
   resolveTickerTool,
   getFilingMetadataTool,
   getSegmentFactsTool,
+  comparePeriodsTool,
+  discoverXbrlConceptsTool,
+  getFilingContentTool,
 ];
 
 export function registerAllTools(server: McpServer): void {

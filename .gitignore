@@ -6,3 +6,4 @@ CLAUDE.md
 .claude/
 temp/
 sec-edgar-mcp/
+dist/

@@ -141,6 +141,65 @@ export interface ConceptResolution {
   suggestions?:            string[];
 }
 
+export interface XbrlConceptSummary {
+  concept_uri:             string;
+  label:                   string;
+  namespace:               string;
+  tag:                     string;
+  unit:                    string;
+  periods_count:           number;
+  latest_period_end:       string;
+  latest_value_normalized: number;
+  has_segment_data:        boolean;
+}
+
+export interface XbrlConceptsOutput {
+  ticker:          string;
+  cik:             string;
+  entity_name:     string;
+  concepts:        XbrlConceptSummary[];
+  total_count:     number;
+  freshness_as_of: string;
+}
+
+export interface PeriodPoint {
+  period_label:     string;
+  end_date:         string;
+  value_normalized: number;
+  unit:             string;
+  filing_type:      string;
+  filed_date:       string;
+}
+
+export interface ComparePeriodsOutput {
+  ticker:                  string;
+  cik:                     string;
+  concept:                 string;
+  label:                   string;
+  period_a:                PeriodPoint | null;
+  period_b:                PeriodPoint | null;
+  growth_percent:          number | null;
+  cagr_percent:            number | null;
+  years_between:           number | null;
+  freshness_as_of:         string;
+  concept_aliases_checked: string[];
+}
+
+export interface FilingContentOutput {
+  ticker:          string;
+  cik:             string;
+  accession_number: string;
+  primary_document: string;
+  source_url:      string;
+  text:            string;
+  offset:          number;
+  chars_returned:  number;
+  total_chars:     number;
+  next_offset:     number | null;
+  has_more:        boolean;
+  freshness_as_of: string;
+}
+
 // ── Filters ───────────────────────────────────────────────────────────────────
 
 export type PeriodFilter =

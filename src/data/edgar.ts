@@ -260,6 +260,48 @@ export async function fetchXbrlDoc(
   }
 }
 
+// Fetch and return plain text content of a primary filing document.
+// Strips HTML tags; returns null on 404, timeout, or non-HTML/text documents.
+export async function fetchFilingContent(
+  cik: string,
+  accn: string,
+  primaryDocument: string,
+  timeoutMs = 10_000,
+): Promise<string | null> {
+  const accnNoDashes = accn.replace(/-/g, "");
+  const url = `https://www.sec.gov/Archives/edgar/data/${cik}/${accnNoDashes}/${primaryDocument}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      signal: controller.signal,
+      headers: { "User-Agent": USER_AGENT, "Accept-Encoding": "gzip" },
+    });
+    if (!res.ok) return null;
+    const raw = await res.text();
+    // Strip <style> and <script> blocks including content
+    let text = raw
+      .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, " ")
+      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, " ");
+    // Remove all remaining HTML tags
+    text = text.replace(/<[^>]+>/g, " ");
+    // Decode common HTML entities
+    text = text
+      .replace(/&amp;/g, "&")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&nbsp;/g, " ")
+      .replace(/&#\d+;/g, " ");
+    // Normalize whitespace
+    text = text.replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
+    return text;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // ── Concurrency-limited Promise.all ──────────────────────────────────────────
 
 export async function pLimit<T>(

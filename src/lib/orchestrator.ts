@@ -20,6 +20,10 @@ import type {
   SegmentToolOutput,
   ToolOutput,
   ConceptResolution,
+  XbrlConceptSummary,
+  XbrlConceptsOutput,
+  ComparePeriodsOutput,
+  PeriodPoint,
 } from "../types.ts";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -407,11 +411,15 @@ export async function extractSegmentFacts(
   const segmentGroups = [...periodFormMap.values()].filter((g) => g.length > 1);
 
   if (segmentGroups.length === 0) {
+    const suggested = discoverSegmentConcepts(doc, fiscalYearEndMonth).slice(0, 8);
+    const suggestionNote = suggested.length > 0
+      ? ` Concepts with segment data found: ${suggested.map((s) => s.concept_uri).join(", ")}.`
+      : "";
     return {
       ticker, cik, concept: resolvedUri, label: conceptData.label,
       facts: [], freshness_as_of, concept_aliases_checked: tried,
       segments_available: false,
-      message: `${ticker} does not appear to tag segment data for "${resolvedUri}" in XBRL. Segment breakdown unavailable via EDGAR REST API.`,
+      message: `${ticker} does not appear to tag segment data for "${resolvedUri}" in XBRL.${suggestionNote}`,
     };
   }
 
@@ -480,5 +488,183 @@ export async function extractSegmentFacts(
     ticker, cik, concept: resolvedUri, label: conceptData.label,
     facts: filteredFacts, freshness_as_of, concept_aliases_checked: tried,
     segments_available: true,
+  };
+}
+
+// ── Segment concept discovery ─────────────────────────────────────────────────
+// Scans companyfacts for concepts that have multiple values per period, indicating
+// segment-level XBRL tagging. Returns them sorted by most-recent data.
+
+function discoverSegmentConcepts(
+  doc: CompanyFactsDoc,
+  fiscalYearEndMonth: number,
+): XbrlConceptSummary[] {
+  const results: XbrlConceptSummary[] = [];
+  for (const [ns, tags] of Object.entries(doc.facts)) {
+    for (const [tag, data] of Object.entries(tags)) {
+      const primaryUnit = selectPrimaryUnit(data.units, `${ns}/${tag}`);
+      const rawFacts = data.units[primaryUnit] ?? [];
+      if (rawFacts.length === 0) continue;
+
+      // Check for segment-like multi-entry periods
+      const periodFormMap = new Map<string, number>();
+      for (const raw of rawFacts) {
+        const key = `${raw.end}::${raw.form}`;
+        periodFormMap.set(key, (periodFormMap.get(key) ?? 0) + 1);
+      }
+      const hasSegmentData = [...periodFormMap.values()].some((c) => c > 1);
+      if (!hasSegmentData) continue;
+
+      const sorted = [...rawFacts].sort((a, b) => b.end.localeCompare(a.end));
+      const latest = sorted[0]!;
+      const scale = resolveScale(rawFacts, primaryUnit);
+      results.push({
+        concept_uri: `${ns}/${tag}`,
+        label: data.label,
+        namespace: ns,
+        tag,
+        unit: primaryUnit,
+        periods_count: new Set(rawFacts.map((f) => f.end)).size,
+        latest_period_end: latest.end,
+        latest_value_normalized: latest.val * scale,
+        has_segment_data: true,
+      });
+    }
+  }
+  results.sort((a, b) => b.latest_period_end.localeCompare(a.latest_period_end));
+  // Suppress unused param warning
+  void fiscalYearEndMonth;
+  return results;
+}
+
+// ── Discover XBRL concepts ────────────────────────────────────────────────────
+
+export async function discoverXbrlConcepts(
+  cik: string,
+  ticker: string,
+  namespace?: string,
+  search?: string,
+  minPeriods = 1,
+  segmentOnly = false,
+): Promise<XbrlConceptsOutput> {
+  const freshness_as_of = new Date().toISOString();
+  const [doc, sub] = await Promise.all([fetchCompanyFacts(cik), fetchSubmissions(cik)]);
+  const fiscalYearEndMonth = parseFiscalYearEnd(sub.fiscalYearEnd);
+
+  const concepts: XbrlConceptSummary[] = [];
+  const nsFilter = namespace?.toLowerCase();
+  const searchLower = search?.toLowerCase();
+
+  for (const [ns, tags] of Object.entries(doc.facts)) {
+    if (nsFilter && ns.toLowerCase() !== nsFilter) continue;
+    for (const [tag, data] of Object.entries(tags)) {
+      if (searchLower && !tag.toLowerCase().includes(searchLower) && !(data.label ?? "").toLowerCase().includes(searchLower)) continue;
+
+      const primaryUnit = selectPrimaryUnit(data.units, `${ns}/${tag}`);
+      const rawFacts = data.units[primaryUnit] ?? [];
+      if (rawFacts.length === 0) continue;
+
+      // Deduplicate by period label to count distinct periods
+      const periodSet = new Set<string>();
+      for (const raw of rawFacts) {
+        const { label: periodLabel } = buildPeriodLabel(raw.start, raw.end, fiscalYearEndMonth);
+        periodSet.add(periodLabel);
+      }
+      if (periodSet.size < minPeriods) continue;
+
+      // Detect segment data
+      const periodFormMap = new Map<string, number>();
+      for (const raw of rawFacts) {
+        const key = `${raw.end}::${raw.form}`;
+        periodFormMap.set(key, (periodFormMap.get(key) ?? 0) + 1);
+      }
+      const hasSegmentData = [...periodFormMap.values()].some((c) => c > 1);
+      if (segmentOnly && !hasSegmentData) continue;
+
+      const sorted = [...rawFacts].sort((a, b) => b.end.localeCompare(a.end));
+      const latest = sorted[0]!;
+      const scale = resolveScale(rawFacts, primaryUnit);
+
+      concepts.push({
+        concept_uri: `${ns}/${tag}`,
+        label: data.label,
+        namespace: ns,
+        tag,
+        unit: primaryUnit,
+        periods_count: periodSet.size,
+        latest_period_end: latest.end,
+        latest_value_normalized: latest.val * scale,
+        has_segment_data: hasSegmentData,
+      });
+    }
+  }
+
+  concepts.sort((a, b) => b.periods_count - a.periods_count || b.latest_period_end.localeCompare(a.latest_period_end));
+
+  return {
+    ticker,
+    cik,
+    entity_name: doc.entityName,
+    concepts,
+    total_count: concepts.length,
+    freshness_as_of,
+  };
+}
+
+// ── Compare two periods ───────────────────────────────────────────────────────
+
+export async function compareConceptPeriods(
+  cik: string,
+  ticker: string,
+  conceptLabel: string,
+  periodA: string,
+  periodB: string,
+): Promise<ComparePeriodsOutput> {
+  const freshness_as_of = new Date().toISOString();
+
+  const result = await normalizeWithAliasResolution(cik, ticker, conceptLabel, "all");
+
+  const toPoint = (label: string): PeriodPoint | null => {
+    const fact = result.facts.find((f) => f.period_label === label);
+    if (!fact) return null;
+    return {
+      period_label: fact.period_label,
+      end_date: fact.end_date,
+      value_normalized: fact.value_normalized,
+      unit: fact.unit,
+      filing_type: fact.filing_type,
+      filed_date: fact.filed_date,
+    };
+  };
+
+  const a = toPoint(periodA);
+  const b = toPoint(periodB);
+
+  let growth_percent: number | null = null;
+  let cagr_percent: number | null = null;
+  let years_between: number | null = null;
+
+  if (a && b && a.value_normalized !== 0) {
+    const msA = new Date(a.end_date).getTime();
+    const msB = new Date(b.end_date).getTime();
+    years_between = Math.round(((msB - msA) / (365.25 * 86_400_000)) * 100) / 100;
+    growth_percent = Math.round(((b.value_normalized - a.value_normalized) / Math.abs(a.value_normalized)) * 10_000) / 100;
+    if (years_between > 0) {
+      cagr_percent = Math.round((((b.value_normalized / a.value_normalized) ** (1 / years_between)) - 1) * 10_000) / 100;
+    }
+  }
+
+  return {
+    ticker,
+    cik,
+    concept: result.concept,
+    label: result.label,
+    period_a: a,
+    period_b: b,
+    growth_percent,
+    cagr_percent,
+    years_between,
+    freshness_as_of,
+    concept_aliases_checked: result.concept_aliases_checked,
   };
 }
