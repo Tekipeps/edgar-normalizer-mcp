@@ -1,5 +1,5 @@
 # Use the official Bun image as the base image
-FROM oven/bun:1.0.2 AS builder
+FROM oven/bun:1.3.11 AS builder
 
 # Set working directory
 WORKDIR /app
@@ -17,7 +17,7 @@ COPY . .
 RUN bun run compile
 
 # Production stage
-FROM oven/bun:1.0.2-slim
+FROM oven/bun:1.3.11-slim
 
 # Set working directory
 WORKDIR /app
@@ -40,7 +40,6 @@ EXPOSE 3001
 # Set environment variables
 ENV NODE_ENV=production
 ENV PORT=3001
-
 
 # Run the server
 CMD ["./server"]
