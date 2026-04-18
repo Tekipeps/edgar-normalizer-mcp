@@ -349,19 +349,38 @@ export async function extractSegmentFacts(
   const [doc, sub] = await Promise.all([fetchCompanyFacts(cik), fetchSubmissions(cik)]);
   const fiscalYearEndMonth = parseFiscalYearEnd(sub.fiscalYearEnd);
 
-  const { namespace, tagName } = parseConceptUri(conceptUri);
-  const conceptData = doc.facts[namespace]?.[tagName];
+  // Build the list of URIs to try: aliases first (if the input matches a known label),
+  // then the raw URI as a fallback so explicit URIs still work.
+  const { concepts: aliasedConcepts } = resolveAliasesToConcepts(conceptUri);
+  const candidateUris = aliasedConcepts.length > 0
+    ? [...new Set([...aliasedConcepts, conceptUri])]
+    : [conceptUri];
+
+  const tried: string[] = [];
+  let resolvedUri = conceptUri;
+  let conceptData: { label: string; description: string; units: Record<string, EdgarFactRaw[]> } | undefined;
+
+  for (const uri of candidateUris) {
+    tried.push(uri);
+    const { namespace, tagName } = parseConceptUri(uri);
+    const data = doc.facts[namespace]?.[tagName];
+    if (data) {
+      resolvedUri = uri;
+      conceptData = data;
+      break;
+    }
+  }
 
   if (!conceptData) {
     return {
-      ticker, cik, concept: conceptUri, label: tagName,
-      facts: [], freshness_as_of, concept_aliases_checked: [conceptUri],
+      ticker, cik, concept: conceptUri, label: conceptUri,
+      facts: [], freshness_as_of, concept_aliases_checked: tried,
       segments_available: false,
-      message: `Concept "${conceptUri}" not found for ${ticker}`,
+      message: `Concept "${conceptUri}" not found for ${ticker} (tried: ${tried.join(", ")})`,
     };
   }
 
-  const primaryUnit = selectPrimaryUnit(conceptData.units, conceptUri);
+  const primaryUnit = selectPrimaryUnit(conceptData.units, resolvedUri);
   const rawFacts: EdgarFactRaw[] = conceptData.units[primaryUnit] ?? [];
   const scale = resolveScale(rawFacts, primaryUnit);
 
@@ -379,10 +398,10 @@ export async function extractSegmentFacts(
 
   if (segmentGroups.length === 0) {
     return {
-      ticker, cik, concept: conceptUri, label: conceptData.label,
-      facts: [], freshness_as_of, concept_aliases_checked: [conceptUri],
+      ticker, cik, concept: resolvedUri, label: conceptData.label,
+      facts: [], freshness_as_of, concept_aliases_checked: tried,
       segments_available: false,
-      message: `${ticker} does not appear to tag segment data for "${conceptUri}" in XBRL. Segment breakdown unavailable via EDGAR REST API.`,
+      message: `${ticker} does not appear to tag segment data for "${resolvedUri}" in XBRL. Segment breakdown unavailable via EDGAR REST API.`,
     };
   }
 
@@ -412,8 +431,8 @@ export async function extractSegmentFacts(
   segmentFacts.sort((a, b) => new Date(a.end_date).getTime() - new Date(b.end_date).getTime());
 
   return {
-    ticker, cik, concept: conceptUri, label: conceptData.label,
-    facts: segmentFacts, freshness_as_of, concept_aliases_checked: [conceptUri],
+    ticker, cik, concept: resolvedUri, label: conceptData.label,
+    facts: segmentFacts, freshness_as_of, concept_aliases_checked: tried,
     segments_available: true,
   };
 }

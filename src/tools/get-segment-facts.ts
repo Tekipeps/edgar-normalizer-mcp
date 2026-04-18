@@ -10,7 +10,11 @@ const inputSchema = {
     .describe("Stock ticker symbol, e.g. \"AMZN\""),
   concept: z
     .string().min(1)
-    .describe("XBRL concept URI to break out by segment, e.g. \"us-gaap/Revenues\""),
+    .describe(
+      "XBRL concept URI or natural language label to break out by segment. " +
+      "Natural language labels (e.g. \"revenue\", \"net income\") are resolved via alias lookup before querying. " +
+      "Explicit URIs (e.g. \"us-gaap/Revenues\") also work and will fall back to aliases if the exact tag is not found.",
+    ),
   segment_dimension: z
     .string().min(1)
     .describe(
