@@ -8,8 +8,12 @@ const inputSchema = {
     .string().min(1).max(10).toUpperCase()
     .describe("Stock ticker symbol, e.g. \"TSLA\""),
   form_type: z
-    .enum(["10-K", "10-Q", "8-K", "all"])
-    .describe("SEC form type to filter by, or \"all\" for every filing type"),
+    .enum(["10-K", "10-K/A", "10-Q", "10-Q/A", "8-K", "8-K/A", "all"])
+    .describe(
+      "SEC form type to filter by. Base types (\"10-K\", \"10-Q\", \"8-K\") include their amendments. " +
+      "Use the \"/A\" variants (\"10-K/A\", \"10-Q/A\", \"8-K/A\") to return amendments only. " +
+      "Use \"all\" for every filing type."
+    ),
   after: z
     .string().optional()
     .describe("ISO 8601 date — return filings filed on or after this date, e.g. \"2022-01-01\""),
@@ -69,10 +73,9 @@ function parseFilings(
     const report = reports[i] ?? "";
     const doc   = primaryDoc[i] ?? "";
 
-    // Filter by form type (include amendments like "10-K/A" when filtering for "10-K")
     if (formType !== "all") {
-      const baseForm = form.replace("/A", "");
-      if (baseForm !== formType) continue;
+      const match = formType.endsWith("/A") ? form === formType : form.replace("/A", "") === formType;
+      if (!match) continue;
     }
 
     if (after && date < after) continue;
