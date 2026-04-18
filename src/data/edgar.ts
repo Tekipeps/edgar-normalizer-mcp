@@ -1,4 +1,5 @@
 import type { CompanyFactsDoc, SubmissionsDoc, TickerCikMap } from "../types.ts";
+import Fuse from "fuse.js";
 
 const EDGAR_BASE    = "https://data.sec.gov";
 const TICKER_MAP_URL = "https://www.sec.gov/files/company_tickers.json";
@@ -84,6 +85,109 @@ export async function warmTickerCache(): Promise<void> {
 
 export function getTickerCacheLoadedAt(): string | null {
   return tickerCacheLoadedAt;
+}
+
+export interface TickerMatch {
+  ticker: string;
+  cik: string;
+  company_name: string;
+  match_type: "exact" | "starts_with" | "contains";
+}
+
+export async function resolveTickerFromName(
+  query: string,
+  maxResults = 10,
+): Promise<TickerMatch[]> {
+  if (!tickerCache) await warmTickerCache();
+  if (!tickerCache) throw new Error("Ticker cache unavailable — EDGAR may be unreachable");
+
+  const q = query.toLowerCase().trim();
+  
+  // Prepare data for Fuse.js
+  const entries = Object.values(tickerCache).map(entry => ({
+    ...entry,
+    name: entry.title.toLowerCase()
+  }));
+
+  // Configure Fuse.js for our needs
+  const fuseOptions = {
+    keys: [
+      { name: 'title', weight: 0.9 }, 
+      { name: 'ticker', weight: 0.1 }
+    ],
+    includeScore: true,
+    threshold: 0.4, // Reduced threshold for better fuzzy matching
+    distance: 100,
+    maxPatternLength: 32,
+    minMatchCharLength: 2, // Increased to avoid matching on single characters
+    findAllMatches: false,
+    isCaseSensitive: false,
+    ignoreLocation: true, // Ignore where in the string the match occurs
+    ignoreFieldNorm: false,
+  };
+
+  const fuse = new Fuse(entries, fuseOptions);
+  // Get more results to have better candidates for sorting
+  const fuzzyResults = fuse.search(q).slice(0, Math.max(30, maxResults * 3));
+
+  // Categorize matches by type and keep track of score for sorting
+  type ScoredMatch = TickerMatch & { score: number };
+  
+  const exact: ScoredMatch[]       = [];
+  const startsWith: ScoredMatch[]  = [];
+  const contains: ScoredMatch[]    = [];
+
+  for (const result of fuzzyResults) {
+    // Ensure score is defined (Fuse.js should always provide it with includeScore: true)
+    const score = result.score ?? 1; // fallback to worst possible score if somehow undefined
+    const entry = result.item;
+    const name = entry.name; // Already lowercase
+    
+    let matchType: TickerMatch["match_type"] = "contains";
+    let matchScore = score;
+
+    // Improve categorization with additional checks
+    if (name === q) {
+      matchType = "exact";
+      matchScore = 0; // Exact matches get score 0
+    } else if (name.startsWith(q)) {
+      matchType = "starts_with";
+      // Starts-with keeps Fuse score
+    } else if (name.includes(q)) {
+      matchType = "contains";
+      // Substring matches get a score boost
+      matchScore = Math.min(score * 0.8, 0.9);
+    }
+    // Otherwise, it's a pure fuzzy match (matchType remains "contains")
+
+    const match: TickerMatch = {
+      ticker: entry.ticker.toUpperCase(),
+      cik: entry.cik_str,
+      company_name: entry.title,
+      match_type: matchType,
+    };
+    
+    if (matchType === "exact") {
+      exact.push({ ...match, score: matchScore });
+    } else if (matchType === "starts_with") {
+      startsWith.push({ ...match, score: matchScore });
+    } else {
+      contains.push({ ...match, score: matchScore });
+    }
+  }
+
+  // Sort each category by score (ascending - lower score is better match)
+  exact.sort((a, b) => a.score - b.score);
+  startsWith.sort((a, b) => a.score - b.score);
+  contains.sort((a, b) => a.score - b.score);
+
+  // Combine results: exact matches first, then starts-with, then contains/fuzzy
+  const combined = [...exact, ...startsWith, ...contains];
+  
+  // Strip the score property before returning (not part of TickerMatch interface)
+  const resultWithoutScore: TickerMatch[] = combined.map(({ score, ...rest }) => rest);
+  
+  return resultWithoutScore.slice(0, maxResults);
 }
 
 export async function resolveCikFromTicker(ticker: string): Promise<string> {
