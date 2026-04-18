@@ -1,0 +1,28 @@
+{
+  "name": "edgar-normalizer-mcp",
+  "version": "1.0.0",
+  "description": "MCP tool server: normalized XBRL financial facts from SEC EDGAR",
+  "module": "src/index.ts",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "bun run --watch src/index.ts",
+    "start": "bun run src/index.ts",
+    "query": "bun run src/cli.ts",
+    "compile": "bun build --compile --minify --target=bun src/index.ts --outfile=dist/server",
+    "test": "bun test",
+    "typecheck": "tsc -b --noEmit"
+  },
+  "dependencies": {
+    "@ctxprotocol/sdk": "^0.8.4",
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "express": "^5.0.1",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.0.0"
+  }
+}
