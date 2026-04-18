@@ -23,7 +23,7 @@ FROM oven/bun:1.3.11-slim
 WORKDIR /app
 
 # Create non-root user for security
-RUN addgroup --system app && adduser --system --ingroup app app
+RUN groupadd --system app && useradd --system --gid app app
 
 # Copy the compiled binary from builder stage
 COPY --from=builder /app/dist/server ./server
