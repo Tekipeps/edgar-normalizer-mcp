@@ -10,11 +10,20 @@ function daysBetween(a: string, b: string): number {
 
 // EDGAR fiscalYearEnd format: "--MM-DD" or "MM-DD" or null/empty
 export function parseFiscalYearEnd(fyeString: string | undefined | null): number {
-  if (!fyeString) return 12; // default to December if missing
-  const match = fyeString.match(/(\d{2})-\d{2}$/);
-  if (!match || !match[1]) return 12;
-  const month = parseInt(match[1], 10);
-  return isNaN(month) || month < 1 || month > 12 ? 12 : month;
+  if (!fyeString) return 12;
+  // EDGAR returns "MMDD" (e.g. "0928") — handle this first
+  const mmddMatch = fyeString.match(/^(\d{2})\d{2}$/);
+  if (mmddMatch?.[1]) {
+    const month = parseInt(mmddMatch[1], 10);
+    if (!isNaN(month) && month >= 1 && month <= 12) return month;
+  }
+  // Also handle "--MM-DD" or "MM-DD" formats
+  const dashMatch = fyeString.match(/(\d{2})-\d{2}$/);
+  if (dashMatch?.[1]) {
+    const month = parseInt(dashMatch[1], 10);
+    if (!isNaN(month) && month >= 1 && month <= 12) return month;
+  }
+  return 12;
 }
 
 // ── Period label builder ──────────────────────────────────────────────────────
