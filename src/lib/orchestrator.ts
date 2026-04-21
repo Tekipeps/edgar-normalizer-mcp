@@ -4,7 +4,7 @@ import {
   fetchXbrlDoc,
   resolveCikFromTicker,
 } from "../data/edgar.ts";
-import { buildXbrlSegmentMap } from "./xbrl-parser.ts";
+import { extractXbrlSegmentEntries } from "./xbrl-parser.ts";
 import {
   resolveAliasesToConcepts,
   getAliasSuggestions,
@@ -459,114 +459,99 @@ export async function extractSegmentFacts(
   const primaryUnit = selectPrimaryUnit(conceptData.units, resolvedUri);
   const rawFacts: EdgarFactRaw[] = conceptData.units[primaryUnit] ?? [];
   const scale = resolveScale(rawFacts, primaryUnit);
-
-  // Detect potential segment facts: group by end_date + form, look for periods
-  // with more entries than expected (consolidated = 1 entry per period/form combo)
-  const periodFormMap = new Map<string, EdgarFactRaw[]>();
-  for (const raw of rawFacts) {
-    const key = `${raw.end}::${raw.form}`;
-    const existing = periodFormMap.get(key) ?? [];
-    existing.push(raw);
-    periodFormMap.set(key, existing);
-  }
-
-  const segmentGroups = [...periodFormMap.values()].filter((g) => g.length > 1);
-
-  if (segmentGroups.length === 0) {
-    const suggested = discoverSegmentConcepts(doc, fiscalYearEndMonth).slice(0, 8);
-    const suggestionNote = suggested.length > 0
-      ? ` Concepts with segment data found: ${suggested.map((s) => s.concept_uri).join(", ")}.`
-      : "";
-    return {
-      ticker, cik, concept: resolvedUri, label: conceptData.label,
-      facts: [], freshness_as_of, concept_aliases_checked: tried,
-      segments_available: false,
-      message: `${ticker} does not appear to tag segment data for "${resolvedUri}" in XBRL.${suggestionNote}`,
-    };
-  }
-
-  // Build segment facts from groups with multiple entries per period
-  const segmentFacts: SegmentFact[] = [];
-  for (const group of segmentGroups) {
-    for (let i = 0; i < group.length; i++) {
-      const raw = group[i];
-      if (!raw) continue;
-      const { label: periodLabel, periodType } = buildPeriodLabel(
-        raw.start, raw.end, fiscalYearEndMonth,
-      );
-      segmentFacts.push({
-        period_label: periodLabel, period_type: periodType,
-        start_date: raw.start ?? null, end_date: raw.end,
-        value: raw.val, unit: primaryUnit, scale,
-        value_normalized: raw.val * scale,
-        filing_type: raw.form, accession_number: raw.accn,
-        filed_date: raw.filed, is_amendment: raw.form.endsWith("/A"),
-        source_url: buildSourceUrl(cik, raw.accn),
-        segment_dimension: _segmentDimension,
-        segment_member: `segment_${i + 1}`,
-      });
-    }
-  }
-
-  segmentFacts.sort((a, b) => new Date(a.end_date).getTime() - new Date(b.end_date).getTime());
-
-  const filteredFacts = filterMultiByPeriodSpec(segmentFacts, periodSpec);
-
-  // Enrich segment_member labels by fetching per-filing XBRL companion docs.
-  // iXBRL filings include a _htm.xml companion that has full dimensional context.
-  const recent = sub.filings.recent;
-  const accnToPrimaryDoc = new Map<string, string>();
-  for (let i = 0; i < recent.accessionNumber.length; i++) {
-    if (recent.isInlineXBRL[i] === 1) {
-      const a = recent.accessionNumber[i];
-      const p = recent.primaryDocument[i];
-      if (a && p) accnToPrimaryDoc.set(a, p);
-    }
-  }
-
   const { tagName: conceptLocalName } = parseConceptUri(resolvedUri);
-  const fetchAccns = [...new Set(filteredFacts.map((f) => f.accession_number))]
-    .filter((a) => accnToPrimaryDoc.has(a))
-    .slice(0, 4);
 
-  if (fetchAccns.length > 0) {
-    const xmlTexts = await Promise.all(
-      fetchAccns.map((a) => fetchXbrlDoc(cik, a, accnToPrimaryDoc.get(a)!)),
-    );
-    const valKeyToMember = new Map<string, string>();
-    for (const xml of xmlTexts) {
-      if (!xml) continue;
-      const m = buildXbrlSegmentMap(xml, _segmentDimension, conceptLocalName);
-      for (const [k, v] of m) if (!valKeyToMember.has(k)) valKeyToMember.set(k, v);
-    }
-    for (const fact of filteredFacts) {
-      const key = `${fact.value}::${fact.start_date ?? ""}::${fact.end_date}`;
-      const member = valKeyToMember.get(key);
-      if (member) fact.segment_member = member;
+  // XBRL-primary extraction: segment-level dimensional facts are NOT in companyfacts
+  // for many companies (e.g. Amazon). They exist only in the _htm.xml companion docs.
+  // Fetch up to 4 recent iXBRL 10-Q/10-K filings and extract segment entries directly.
+  const SEGMENT_AXES = [
+    _segmentDimension,
+    ...["StatementBusinessSegmentsAxis", "SegmentReportingInformationBySegmentAxis", "BusinessSegmentsAxis"]
+      .filter((a) => a !== _segmentDimension),
+  ];
+
+  const recent = sub.filings.recent;
+  const recentIxbrlFilings: Array<{ accn: string; primaryDoc: string; filedDate: string; form: string }> = [];
+  for (let i = 0; i < recent.accessionNumber.length; i++) {
+    if (recent.isInlineXBRL[i] !== 1) continue;
+    const form = recent.form[i] ?? "";
+    if (!["10-Q", "10-K", "10-Q/A", "10-K/A"].includes(form)) continue;
+    const a = recent.accessionNumber[i];
+    const p = recent.primaryDocument[i];
+    const d = recent.filingDate[i];
+    if (a && p && d) recentIxbrlFilings.push({ accn: a, primaryDoc: p, filedDate: d, form });
+    if (recentIxbrlFilings.length >= 4) break;
+  }
+
+  const xmlTexts = await Promise.all(
+    recentIxbrlFilings.map((f) => fetchXbrlDoc(cik, f.accn, f.primaryDoc)),
+  );
+
+  const xbrlSegmentFacts: SegmentFact[] = [];
+  const seenPeriodMember = new Set<string>();
+
+  for (let i = 0; i < xmlTexts.length; i++) {
+    const xml = xmlTexts[i];
+    const filing = recentIxbrlFilings[i]!;
+    if (!xml) continue;
+
+    for (const axis of SEGMENT_AXES) {
+      const entries = extractXbrlSegmentEntries(xml, axis, conceptLocalName);
+      if (entries.length === 0) continue;
+
+      for (const entry of entries) {
+        const key = `${entry.memberName}::${entry.startDate ?? ""}::${entry.endDate}`;
+        if (seenPeriodMember.has(key)) continue;
+        seenPeriodMember.add(key);
+
+        const { label: periodLabel, periodType } = buildPeriodLabel(
+          entry.startDate, entry.endDate, fiscalYearEndMonth,
+        );
+        xbrlSegmentFacts.push({
+          period_label: periodLabel,
+          period_type: periodType,
+          start_date: entry.startDate ?? null,
+          end_date: entry.endDate,
+          value: entry.val,
+          unit: primaryUnit,
+          scale,
+          value_normalized: entry.val * scale,
+          filing_type: filing.form,
+          accession_number: filing.accn,
+          filed_date: filing.filedDate,
+          is_amendment: filing.form.endsWith("/A"),
+          source_url: buildSourceUrl(cik, filing.accn),
+          segment_dimension: axis,
+          segment_member: entry.memberName,
+        });
+      }
+      break; // found a working axis for this filing; don't try fallbacks
     }
   }
 
-  // Drop consolidated rows and any facts whose segment member couldn't be resolved
-  // by XBRL enrichment. Generic "segment_N" labels indicate facts without dimension
-  // context (the consolidated total row). These must not be returned as segment data.
-  const resolvedFacts = filteredFacts.filter((f) => !/^segment_\d+$/.test(f.segment_member));
-
-  if (resolvedFacts.length === 0) {
-    return {
-      ticker, cik, concept: resolvedUri, label: conceptData.label,
-      facts: [], freshness_as_of, concept_aliases_checked: tried,
-      segments_available: false,
-      message: `Segment member names could not be resolved for "${resolvedUri}" in ${ticker} — ` +
-        `iXBRL companion documents were unavailable or did not contain dimension context for ` +
-        `axis "${_segmentDimension}". Try get_filing_metadata to locate a recent 10-K/10-Q ` +
-        `accession and fetch the XBRL inline document directly.`,
-    };
+  if (xbrlSegmentFacts.length > 0) {
+    xbrlSegmentFacts.sort((a, b) => new Date(a.end_date).getTime() - new Date(b.end_date).getTime());
+    const filteredFacts = filterMultiByPeriodSpec(xbrlSegmentFacts, periodSpec);
+    if (filteredFacts.length > 0) {
+      return {
+        ticker, cik, concept: resolvedUri, label: conceptData.label,
+        facts: filteredFacts, freshness_as_of, concept_aliases_checked: tried,
+        segments_available: true,
+      };
+    }
   }
 
+  // XBRL extraction found nothing — no dimension context in companion docs.
+  const suggested = discoverSegmentConcepts(doc, fiscalYearEndMonth).slice(0, 8);
+  const suggestionNote = suggested.length > 0
+    ? ` Concepts with segment data found: ${suggested.map((s) => s.concept_uri).join(", ")}.`
+    : "";
   return {
     ticker, cik, concept: resolvedUri, label: conceptData.label,
-    facts: resolvedFacts, freshness_as_of, concept_aliases_checked: tried,
-    segments_available: true,
+    facts: [], freshness_as_of, concept_aliases_checked: tried,
+    segments_available: false,
+    message: `Segment data for "${resolvedUri}" in ${ticker} could not be extracted from iXBRL ` +
+      `companion documents (axis: "${_segmentDimension}").${suggestionNote}`,
   };
 }
 
