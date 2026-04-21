@@ -521,7 +521,7 @@ export async function extractSegmentFacts(
   ];
 
   const recent = sub.filings.recent;
-  const recentIxbrlFilings: Array<{ accn: string; primaryDoc: string; filedDate: string; form: string }> = [];
+  const filingCandidates: Array<{ accn: string; primaryDoc: string; filedDate: string; form: string }> = [];
   for (let i = 0; i < recent.accessionNumber.length; i++) {
     if (recent.isInlineXBRL[i] !== 1) continue;
     const form = recent.form[i] ?? "";
@@ -529,9 +529,13 @@ export async function extractSegmentFacts(
     const a = recent.accessionNumber[i];
     const p = recent.primaryDocument[i];
     const d = recent.filingDate[i];
-    if (a && p && d) recentIxbrlFilings.push({ accn: a, primaryDoc: p, filedDate: d, form });
-    if (recentIxbrlFilings.length >= 4) break;
+    if (a && p && d) filingCandidates.push({ accn: a, primaryDoc: p, filedDate: d, form });
   }
+
+  const recentIxbrlFilings = [
+    ...filingCandidates.filter((f) => !f.form.endsWith("/A")),
+    ...filingCandidates.filter((f) => f.form.endsWith("/A")),
+  ].slice(0, 4);
 
   const xmlTexts = await Promise.all(
     recentIxbrlFilings.map((f) => fetchXbrlDoc(cik, f.accn, f.primaryDoc)),
