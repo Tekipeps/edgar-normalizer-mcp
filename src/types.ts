@@ -69,6 +69,7 @@ export interface EdgarFact {
   accession_number:  string;
   filed_date:        string;
   is_amendment:      boolean;
+  is_derived?:       boolean;   // true when value is computed from annual − 9-month YTD
   source_url:        string;
 }
 
@@ -207,4 +208,4 @@ export type PeriodFilter =
   | "last_8_quarters"
   | "last_12_quarters"
   | "all"
-  | string;   // e.g. "FY2023", "Q3 FY2024"
+  | string;   // e.g. "FY2023", "Q3 FY2024", "last_1_years", "last_4_years"

@@ -13,7 +13,7 @@ const inputSchema = {
     .describe("XBRL concept URIs (e.g. \"us-gaap/Revenues\") or natural language labels (e.g. \"revenue\"). Max 10."),
   periods: z
     .string().default("last_8_quarters")
-    .describe("Period filter: \"last_4_quarters\", \"last_8_quarters\", \"last_12_quarters\", \"all\", \"FY2023\", or \"Q3 FY2024\""),
+    .describe("Period filter: \"last_4_quarters\", \"last_8_quarters\", \"last_12_quarters\", \"last_1_years\", \"last_4_years\", \"all\", \"FY2023\", or \"Q3 FY2024\""),
 };
 
 const outputSchema = {
@@ -34,6 +34,7 @@ const outputSchema = {
     accession_number: z.string(),
     filed_date:       z.string(),
     is_amendment:     z.boolean(),
+    is_derived:       z.boolean().optional(),
     source_url:       z.string(),
   })),
   freshness_as_of:         z.string(),

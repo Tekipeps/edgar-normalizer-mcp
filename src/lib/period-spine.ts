@@ -115,6 +115,25 @@ export function filterByPeriodSpec(facts: EdgarFact[], periodSpec: PeriodFilter)
     return result.sort((a, b) => new Date(a.end_date).getTime() - new Date(b.end_date).getTime());
   }
 
+  const yearMatch = periodSpec.match(/^last_(\d+)_years?$/);
+  if (yearMatch) {
+    const n = parseInt(yearMatch[1] ?? "1", 10);
+    const annualFacts = facts.filter((f) => /^FY\d{4}$/.test(f.period_label));
+    const sorted = [...annualFacts].sort(
+      (a, b) => new Date(b.end_date).getTime() - new Date(a.end_date).getTime(),
+    );
+    const seen = new Set<string>();
+    const result: EdgarFact[] = [];
+    for (const f of sorted) {
+      if (!seen.has(f.period_label)) {
+        seen.add(f.period_label);
+        result.push(f);
+        if (result.length === n) break;
+      }
+    }
+    return result.sort((a, b) => new Date(a.end_date).getTime() - new Date(b.end_date).getTime());
+  }
+
   // Exact period label match (e.g., "FY2023", "Q3 FY2024")
   return facts.filter((f) => f.period_label === periodSpec);
 }
@@ -142,6 +161,25 @@ export function filterMultiByPeriodSpec<T extends EdgarFact>(facts: T[], periodS
     }
     return facts
       .filter((f) => kept.has(f.period_label))
+      .sort((a, b) => new Date(a.end_date).getTime() - new Date(b.end_date).getTime());
+  }
+
+  const yearMatchM = periodSpec.match(/^last_(\d+)_years?$/);
+  if (yearMatchM) {
+    const n = parseInt(yearMatchM[1] ?? "1", 10);
+    const annualFacts = facts.filter((f) => /^FY\d{4}$/.test(f.period_label));
+    const sorted = [...annualFacts].sort(
+      (a, b) => new Date(b.end_date).getTime() - new Date(a.end_date).getTime(),
+    );
+    const kept2 = new Set<string>();
+    for (const f of sorted) {
+      if (!kept2.has(f.period_label)) {
+        kept2.add(f.period_label);
+        if (kept2.size === n) break;
+      }
+    }
+    return facts
+      .filter((f) => kept2.has(f.period_label))
       .sort((a, b) => new Date(a.end_date).getTime() - new Date(b.end_date).getTime());
   }
 

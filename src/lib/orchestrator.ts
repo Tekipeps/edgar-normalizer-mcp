@@ -93,6 +93,43 @@ function selectPrimaryUnit(units: Record<string, EdgarFactRaw[]>, conceptUri: st
   return best;
 }
 
+// ── Q4 derivation helper ──────────────────────────────────────────────────────
+// For companies that only report Q4 in their annual 10-K (e.g. Apple), there is no
+// standalone quarterly XBRL fact for Q4. Derive it as FY − 9M YTD when both exist.
+// Only applies to USD flow concepts (not per-share, not balance-sheet instants).
+
+function deriveQ4Facts(allFacts: EdgarFact[], unit: string): EdgarFact[] {
+  if (unit !== "USD") return [];
+
+  const annualByFY    = new Map<string, EdgarFact>(); // "FY2024" → annual fact
+  const nineMonthByFY = new Map<string, EdgarFact>(); // "FY2024" → 9M YTD fact
+  const hasQ4         = new Set<string>();            // FY labels that already have Q4
+
+  for (const f of allFacts) {
+    if (/^FY\d{4}$/.test(f.period_label))    annualByFY.set(f.period_label, f);
+    if (/^9M FY\d{4}$/.test(f.period_label)) nineMonthByFY.set(f.period_label.slice(3), f);
+    if (/^Q4 FY\d{4}$/.test(f.period_label)) hasQ4.add(f.period_label.slice(3));
+  }
+
+  const derived: EdgarFact[] = [];
+  for (const [fyLabel, annual] of annualByFY) {
+    if (hasQ4.has(fyLabel)) continue;
+    const nineM = nineMonthByFY.get(fyLabel);
+    if (!nineM || !annual.start_date || !nineM.start_date) continue;
+
+    const q4Val = annual.value - nineM.value;
+    derived.push({
+      ...annual,
+      period_label:     `Q4 ${fyLabel}`,
+      start_date:       nineM.end_date,
+      value:            q4Val,
+      value_normalized: q4Val * annual.scale,
+      is_derived:       true,
+    });
+  }
+  return derived;
+}
+
 // ── Core normalization pipeline ───────────────────────────────────────────────
 
 export async function normalizeConceptFacts(
@@ -176,15 +213,22 @@ export async function normalizeConceptFacts(
     }
   }
 
-  // Step 7: Sort chronologically + apply period filter
+  // Step 7: Sort chronologically, synthesize missing Q4s, then apply period filter
   const allFacts = [...periodMap.values()]
     .map((e) => e.fact)
     .sort((a, b) => new Date(a.end_date).getTime() - new Date(b.end_date).getTime());
 
-  const filtered = filterByPeriodSpec(allFacts, periodSpec);
+  const q4Derived = deriveQ4Facts(allFacts, primaryUnit);
+  const allFactsWithQ4 = q4Derived.length > 0
+    ? [...allFacts, ...q4Derived].sort(
+        (a, b) => new Date(a.end_date).getTime() - new Date(b.end_date).getTime(),
+      )
+    : allFacts;
+
+  const filtered = filterByPeriodSpec(allFactsWithQ4, periodSpec);
 
   // Warn if the most recent fact is over 2 years old — company may have switched concepts
-  const latestFact = allFacts[allFacts.length - 1];
+  const latestFact = allFactsWithQ4[allFactsWithQ4.length - 1];
   const twoYearsAgo = Date.now() - 2 * 365.25 * 24 * 3600 * 1000;
   const staleness_warning =
     latestFact && new Date(latestFact.filed_date).getTime() < twoYearsAgo
@@ -223,6 +267,10 @@ export async function normalizeWithAliasResolution(
   const doc = prefetchedDoc ?? await fetchCompanyFacts(cik);
   const tried: string[] = [];
 
+  // For annual period queries, prefer the concept whose most recent *annual period end* is latest.
+  // For quarterly/all queries, fall back to most recently filed fact (original behavior).
+  const isAnnualQuery = /last_\d+_years?/.test(periodSpec) || /^FY\d{4}$/.test(periodSpec);
+
   // Collect all candidates with data, then pick the one with the most recent filing
   const candidates: Array<{ conceptUri: string; latestFiled: number }> = [];
   for (const conceptUri of concepts) {
@@ -234,7 +282,21 @@ export async function normalizeWithAliasResolution(
     const rawFacts = conceptData.units[primaryUnit] ?? [];
     if (rawFacts.length === 0) continue;
     const latestFiled = Math.max(...rawFacts.map((f) => new Date(f.filed).getTime()));
-    candidates.push({ conceptUri, latestFiled });
+    // For annual queries, score by the latest annual period end date rather than filing date
+    const score = isAnnualQuery
+      ? (Math.max(
+          0,
+          ...rawFacts
+            .filter((f) => {
+              const days = f.start
+                ? Math.round((new Date(f.end).getTime() - new Date(f.start).getTime()) / 86_400_000)
+                : 0;
+              return days >= 350 && days <= 380;
+            })
+            .map((f) => new Date(f.end).getTime()),
+        ) || latestFiled)
+      : latestFiled;
+    candidates.push({ conceptUri, latestFiled: score });
   }
 
   if (candidates.length > 0) {
@@ -484,9 +546,26 @@ export async function extractSegmentFacts(
     }
   }
 
+  // Drop consolidated rows and any facts whose segment member couldn't be resolved
+  // by XBRL enrichment. Generic "segment_N" labels indicate facts without dimension
+  // context (the consolidated total row). These must not be returned as segment data.
+  const resolvedFacts = filteredFacts.filter((f) => !/^segment_\d+$/.test(f.segment_member));
+
+  if (resolvedFacts.length === 0) {
+    return {
+      ticker, cik, concept: resolvedUri, label: conceptData.label,
+      facts: [], freshness_as_of, concept_aliases_checked: tried,
+      segments_available: false,
+      message: `Segment member names could not be resolved for "${resolvedUri}" in ${ticker} — ` +
+        `iXBRL companion documents were unavailable or did not contain dimension context for ` +
+        `axis "${_segmentDimension}". Try get_filing_metadata to locate a recent 10-K/10-Q ` +
+        `accession and fetch the XBRL inline document directly.`,
+    };
+  }
+
   return {
     ticker, cik, concept: resolvedUri, label: conceptData.label,
-    facts: filteredFacts, freshness_as_of, concept_aliases_checked: tried,
+    facts: resolvedFacts, freshness_as_of, concept_aliases_checked: tried,
     segments_available: true,
   };
 }
