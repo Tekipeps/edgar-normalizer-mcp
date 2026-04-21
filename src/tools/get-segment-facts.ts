@@ -49,6 +49,7 @@ const outputSchema = {
     accession_number:  z.string(),
     filed_date:        z.string(),
     is_amendment:      z.boolean(),
+    is_derived:        z.boolean().optional(),
     source_url:        z.string(),
     segment_dimension: z.string(),
     segment_member:    z.string(),

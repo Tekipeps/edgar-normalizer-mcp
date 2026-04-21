@@ -60,9 +60,13 @@ describe("get_facts", () => {
       },
       undefined,
     );
-    const data = result.structuredContent as unknown as ToolOutput<EdgarFact>;
+    const data = result.structuredContent as any;
 
     expect(data.facts.length).toBeGreaterThan(4);
+    for (const fact of data.facts.slice(0, 4)) {
+      expect(fact.concept).toEqual(expect.any(String));
+      expect(fact.label).toEqual(expect.any(String));
+    }
   });
 
   test("gross profit works as test case", async () => {

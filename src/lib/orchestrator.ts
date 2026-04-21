@@ -16,6 +16,7 @@ import type {
   EdgarFact,
   EdgarFactRaw,
   PeriodFilter,
+  SubmissionsDoc,
   SegmentFact,
   SegmentToolOutput,
   ToolOutput,
@@ -186,13 +187,14 @@ export async function normalizeConceptFacts(
   conceptUri: string,
   periodSpec: PeriodFilter,
   prefetchedDoc?: CompanyFactsDoc,
+  prefetchedSubmissions?: SubmissionsDoc,
 ): Promise<ToolOutput<EdgarFact>> {
   const freshness_as_of = new Date().toISOString();
 
   // Step 1: Fetch companyfacts (or reuse pre-fetched)
   const [doc, sub] = await Promise.all([
     prefetchedDoc ? Promise.resolve(prefetchedDoc) : fetchCompanyFacts(cik),
-    fetchSubmissions(cik),
+    prefetchedSubmissions ? Promise.resolve(prefetchedSubmissions) : fetchSubmissions(cik),
   ]);
 
   const fiscalYearEndMonth = parseFiscalYearEnd(sub.fiscalYearEnd);
@@ -298,6 +300,7 @@ export async function normalizeWithAliasResolution(
   label: string,
   periodSpec: PeriodFilter,
   prefetchedDoc?: CompanyFactsDoc,
+  prefetchedSubmissions?: SubmissionsDoc,
 ): Promise<ToolOutput<EdgarFact>> {
   const { concepts, confidence: _c } = resolveAliasesToConcepts(label);
 
@@ -350,7 +353,14 @@ export async function normalizeWithAliasResolution(
   if (candidates.length > 0) {
     candidates.sort((a, b) => b.latestFiled - a.latestFiled);
     const best = candidates[0]!;
-    const result = await normalizeConceptFacts(cik, ticker, best.conceptUri, periodSpec, doc);
+    const result = await normalizeConceptFacts(
+      cik,
+      ticker,
+      best.conceptUri,
+      periodSpec,
+      doc,
+      prefetchedSubmissions,
+    );
     return { ...result, concept_aliases_checked: tried };
   }
 

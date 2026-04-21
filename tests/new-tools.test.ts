@@ -346,4 +346,22 @@ describe("get_segment_facts — discovery fallback", () => {
     // Either way the response is well-formed
     expect(data.ticker).toBe("AMZN");
   });
+
+  test("derived segment rows are surfaced in schema-compatible output", async () => {
+    const result = await getSegmentFactsTool.handler(
+      {
+        ticker: "TSLA",
+        concept: "revenue",
+        segment_dimension: "StatementBusinessSegmentsAxis",
+        period: "last_4_quarters",
+      },
+      undefined,
+    );
+    const data = result.structuredContent as unknown as SegmentToolOutput;
+
+    expect(result.isError).toBeFalsy();
+    if (data.segments_available) {
+      expect(data.facts.some((f) => f.is_derived === true)).toBe(true);
+    }
+  });
 });
