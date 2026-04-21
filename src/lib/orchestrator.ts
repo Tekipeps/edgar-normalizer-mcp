@@ -135,6 +135,49 @@ function deriveQ4Facts(allFacts: EdgarFact[], unit: string): EdgarFact[] {
   return derived;
 }
 
+function deriveQ4SegmentFacts(allFacts: SegmentFact[], unit: string): SegmentFact[] {
+  if (unit !== "USD") return [];
+
+  const factsByMember = new Map<string, SegmentFact[]>();
+  for (const fact of allFacts) {
+    const existing = factsByMember.get(fact.segment_member) ?? [];
+    existing.push(fact);
+    factsByMember.set(fact.segment_member, existing);
+  }
+
+  const derived: SegmentFact[] = [];
+
+  for (const memberFacts of factsByMember.values()) {
+    const annualByFY = new Map<string, SegmentFact>();
+    const nineMonthByFY = new Map<string, SegmentFact>();
+    const hasQ4 = new Set<string>();
+
+    for (const fact of memberFacts) {
+      if (/^FY\d{4}$/.test(fact.period_label)) annualByFY.set(fact.period_label, fact);
+      if (/^9M FY\d{4}$/.test(fact.period_label)) nineMonthByFY.set(fact.period_label.slice(3), fact);
+      if (/^Q4 FY\d{4}$/.test(fact.period_label)) hasQ4.add(fact.period_label.slice(3));
+    }
+
+    for (const [fyLabel, annual] of annualByFY) {
+      if (hasQ4.has(fyLabel)) continue;
+      const nineM = nineMonthByFY.get(fyLabel);
+      if (!nineM || !annual.start_date || !nineM.start_date) continue;
+
+      const q4Val = annual.value - nineM.value;
+      derived.push({
+        ...annual,
+        period_label: `Q4 ${fyLabel}`,
+        start_date: nineM.end_date,
+        value: q4Val,
+        value_normalized: q4Val * annual.scale,
+        is_derived: true,
+      });
+    }
+  }
+
+  return derived;
+}
+
 // ── Core normalization pipeline ───────────────────────────────────────────────
 
 export async function normalizeConceptFacts(
@@ -538,7 +581,13 @@ export async function extractSegmentFacts(
 
   if (xbrlSegmentFacts.length > 0) {
     xbrlSegmentFacts.sort((a, b) => new Date(a.end_date).getTime() - new Date(b.end_date).getTime());
-    const filteredFacts = filterMultiByPeriodSpec(xbrlSegmentFacts, periodSpec);
+    const q4Derived = deriveQ4SegmentFacts(xbrlSegmentFacts, primaryUnit);
+    const allFactsWithQ4 = q4Derived.length > 0
+      ? [...xbrlSegmentFacts, ...q4Derived].sort(
+          (a, b) => new Date(a.end_date).getTime() - new Date(b.end_date).getTime(),
+        )
+      : xbrlSegmentFacts;
+    const filteredFacts = filterMultiByPeriodSpec(allFactsWithQ4, periodSpec);
     if (filteredFacts.length > 0) {
       return {
         ticker, cik, concept: resolvedUri, label: conceptLabel,

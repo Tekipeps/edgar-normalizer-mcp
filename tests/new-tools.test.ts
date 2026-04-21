@@ -340,6 +340,8 @@ describe("get_segment_facts — discovery fallback", () => {
     expect(result.isError).toBeFalsy();
     if (data.segments_available) {
       expect(data.facts.length).toBeGreaterThan(0);
+      const periodLabels = [...new Set(data.facts.map((f) => f.period_label))];
+      expect(periodLabels).toHaveLength(4);
     }
     // Either way the response is well-formed
     expect(data.ticker).toBe("AMZN");
