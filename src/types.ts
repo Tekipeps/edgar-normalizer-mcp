@@ -18,8 +18,8 @@ export interface CompanyFactsDoc {
   cik:        number;
   entityName: string;
   facts:      Record<string, Record<string, {
-    label:       string;
-    description: string;
+    label:       string | null;
+    description: string | null;
     units:       Record<string, EdgarFactRaw[]>;
   }>>;
 }

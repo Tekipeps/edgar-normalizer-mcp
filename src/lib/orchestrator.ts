@@ -34,6 +34,11 @@ function parseConceptUri(conceptUri: string): { namespace: string; tagName: stri
   return { namespace: conceptUri.slice(0, slash), tagName: conceptUri.slice(slash + 1) };
 }
 
+function normalizeConceptLabel(tagName: string, rawLabel: string | null | undefined): string {
+  const label = rawLabel?.trim();
+  return label ? label : tagName;
+}
+
 function buildSourceUrl(cik: string, accn: string): string {
   const noDashes = accn.replace(/-/g, "");
   return `https://www.sec.gov/Archives/edgar/data/${cik}/${noDashes}/${accn}-index.htm`;
@@ -152,7 +157,7 @@ export async function normalizeConceptFacts(
   // Step 2: Filter to requested concept
   const { namespace, tagName } = parseConceptUri(conceptUri);
   const conceptData = doc.facts[namespace]?.[tagName];
-  const conceptLabel = conceptData?.label ?? tagName;
+  const conceptLabel = normalizeConceptLabel(tagName, conceptData?.label);
 
   if (!conceptData) {
     return {
@@ -390,7 +395,7 @@ export async function resolveConceptForTicker(
     return {
       found: true,
       concept_uri: conceptUri,
-      label: conceptData.label,
+      label: normalizeConceptLabel(tagName, conceptData.label),
       confidence: tried.length === 1 ? confidence as "exact" | "alias" : "fallback",
       aliases_tried: tried,
       periods_available: periodsSet.size,
@@ -427,7 +432,7 @@ export async function extractSegmentFacts(
     : [conceptUri];
 
   const tried: string[] = [];
-  type ConceptEntry = { label: string; description: string; units: Record<string, EdgarFactRaw[]> };
+  type ConceptEntry = { label: string | null; description: string | null; units: Record<string, EdgarFactRaw[]> };
   const candidates: Array<{ uri: string; data: ConceptEntry; latestFiled: number }> = [];
 
   for (const uri of candidateUris) {
@@ -446,6 +451,8 @@ export async function extractSegmentFacts(
   const best = candidates[0];
   const resolvedUri = best?.uri ?? conceptUri;
   const conceptData = best?.data;
+  const { tagName: resolvedTagName } = parseConceptUri(resolvedUri);
+  const conceptLabel = normalizeConceptLabel(resolvedTagName, conceptData?.label);
 
   if (!conceptData) {
     return {
@@ -534,7 +541,7 @@ export async function extractSegmentFacts(
     const filteredFacts = filterMultiByPeriodSpec(xbrlSegmentFacts, periodSpec);
     if (filteredFacts.length > 0) {
       return {
-        ticker, cik, concept: resolvedUri, label: conceptData.label,
+        ticker, cik, concept: resolvedUri, label: conceptLabel,
         facts: filteredFacts, freshness_as_of, concept_aliases_checked: tried,
         segments_available: true,
       };
@@ -547,7 +554,7 @@ export async function extractSegmentFacts(
     ? ` Concepts with segment data found: ${suggested.map((s) => s.concept_uri).join(", ")}.`
     : "";
   return {
-    ticker, cik, concept: resolvedUri, label: conceptData.label,
+    ticker, cik, concept: resolvedUri, label: conceptLabel,
     facts: [], freshness_as_of, concept_aliases_checked: tried,
     segments_available: false,
     message: `Segment data for "${resolvedUri}" in ${ticker} could not be extracted from iXBRL ` +
@@ -584,7 +591,7 @@ function discoverSegmentConcepts(
       const scale = resolveScale(rawFacts, primaryUnit);
       results.push({
         concept_uri: `${ns}/${tag}`,
-        label: data.label,
+        label: normalizeConceptLabel(tag, data.label),
         namespace: ns,
         tag,
         unit: primaryUnit,
@@ -651,7 +658,7 @@ export async function discoverXbrlConcepts(
 
       concepts.push({
         concept_uri: `${ns}/${tag}`,
-        label: data.label,
+        label: normalizeConceptLabel(tag, data.label),
         namespace: ns,
         tag,
         unit: primaryUnit,

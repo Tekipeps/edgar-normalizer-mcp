@@ -243,7 +243,7 @@ export async function fetchXbrlDoc(
   if (!/\.html?$/i.test(primaryDocument)) return null;
   const accnNoDashes = accn.replace(/-/g, "");
   const xbrlName = primaryDocument.replace(/\.html?$/i, "_htm.xml");
-  const url = `${EDGAR_BASE}/Archives/edgar/data/${cik}/${accnNoDashes}/${xbrlName}`;
+  const url = `https://www.sec.gov/Archives/edgar/data/${cik}/${accnNoDashes}/${xbrlName}`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
