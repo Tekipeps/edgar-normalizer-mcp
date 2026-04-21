@@ -40,6 +40,57 @@ function normalizeConceptLabel(tagName: string, rawLabel: string | null | undefi
   return label ? label : tagName;
 }
 
+function isAnnualQuery(periodSpec: PeriodFilter): boolean {
+  return /last_\d+_years?/.test(periodSpec) || /^FY\d{4}$/.test(periodSpec);
+}
+
+function isRelativePeriodQuery(periodSpec: PeriodFilter): boolean {
+  return /^last_\d+_(quarters|years?)$/.test(periodSpec);
+}
+
+function scoreConceptCandidate(rawFacts: EdgarFactRaw[], periodSpec: PeriodFilter): number {
+  const latestFiled = Math.max(...rawFacts.map((f) => new Date(f.filed).getTime()));
+  if (!isAnnualQuery(periodSpec)) return latestFiled;
+
+  return (
+    Math.max(
+      0,
+      ...rawFacts
+        .filter((f) => {
+          const days = f.start
+            ? Math.round((new Date(f.end).getTime() - new Date(f.start).getTime()) / 86_400_000)
+            : 0;
+          return days >= 350 && days <= 380;
+        })
+        .map((f) => new Date(f.end).getTime()),
+    ) || latestFiled
+  );
+}
+
+function rankAvailableConceptCandidates(
+  doc: CompanyFactsDoc,
+  conceptUris: string[],
+  periodSpec: PeriodFilter,
+): Array<{ conceptUri: string; latestFiled: number }> {
+  const candidates: Array<{ conceptUri: string; latestFiled: number }> = [];
+
+  for (const conceptUri of conceptUris) {
+    const { namespace, tagName } = parseConceptUri(conceptUri);
+    const conceptData = doc.facts[namespace]?.[tagName];
+    if (!conceptData) continue;
+    const primaryUnit = selectPrimaryUnit(conceptData.units, conceptUri);
+    const rawFacts = conceptData.units[primaryUnit] ?? [];
+    if (rawFacts.length === 0) continue;
+    candidates.push({
+      conceptUri,
+      latestFiled: scoreConceptCandidate(rawFacts, periodSpec),
+    });
+  }
+
+  candidates.sort((a, b) => b.latestFiled - a.latestFiled);
+  return candidates;
+}
+
 function buildSourceUrl(cik: string, accn: string): string {
   const noDashes = accn.replace(/-/g, "");
   return `https://www.sec.gov/Archives/edgar/data/${cik}/${noDashes}/${accn}-index.htm`;
@@ -179,6 +230,47 @@ function deriveQ4SegmentFacts(allFacts: SegmentFact[], unit: string): SegmentFac
   return derived;
 }
 
+async function normalizeWithExplicitFallback(
+  cik: string,
+  ticker: string,
+  requestedConcept: string,
+  conceptLabel: string,
+  periodSpec: PeriodFilter,
+  doc: CompanyFactsDoc,
+  sub: SubmissionsDoc,
+  currentConceptScore: number,
+): Promise<ToolOutput<EdgarFact> | null> {
+  const { concepts } = resolveAliasesToConcepts(conceptLabel);
+  const tried = [requestedConcept, ...concepts.filter((uri) => uri !== requestedConcept)];
+  const fallbackCandidates = rankAvailableConceptCandidates(
+    doc,
+    tried.filter((uri) => uri !== requestedConcept),
+    periodSpec,
+  );
+
+  const bestFallback = fallbackCandidates[0];
+  if (!bestFallback || bestFallback.latestFiled <= currentConceptScore) return null;
+
+  const result = await normalizeConceptFacts(
+    cik,
+    ticker,
+    bestFallback.conceptUri,
+    periodSpec,
+    doc,
+    sub,
+  );
+
+  return {
+    ...result,
+    requested_concept: requestedConcept,
+    resolved_from_deprecated_concept: true,
+    concept_aliases_checked: tried,
+    staleness_warning:
+      `Requested concept "${requestedConcept}" is stale for ${ticker}. ` +
+      `Returned "${result.concept}" instead based on fresher EDGAR data.`,
+  };
+}
+
 // ── Core normalization pipeline ───────────────────────────────────────────────
 
 export async function normalizeConceptFacts(
@@ -217,6 +309,7 @@ export async function normalizeConceptFacts(
 
   // Step 4: Normalize scale
   const scale = resolveScale(rawFacts, primaryUnit);
+  const currentConceptScore = scoreConceptCandidate(rawFacts, periodSpec);
 
   // Step 5: Build period spine + Step 6: Deduplicate
   // Group by period label, keep most recently filed per period
@@ -280,10 +373,33 @@ export async function normalizeConceptFacts(
   // Warn if the most recent fact is over 2 years old — company may have switched concepts
   const latestFact = allFactsWithQ4[allFactsWithQ4.length - 1];
   const twoYearsAgo = Date.now() - 2 * 365.25 * 24 * 3600 * 1000;
+  const requestedConceptIsStale =
+    !!latestFact && new Date(latestFact.filed_date).getTime() < twoYearsAgo;
   const staleness_warning =
-    latestFact && new Date(latestFact.filed_date).getTime() < twoYearsAgo
+    requestedConceptIsStale
       ? `Most recent data for "${conceptUri}" is from ${latestFact.filed_date}. The company may have adopted a different XBRL concept (e.g. RevenueFromContractWithCustomerExcludingAssessedTax replaced Revenues after ASC 606).`
       : undefined;
+
+  const shouldAttemptExplicitFallback =
+    periodSpec !== "all" &&
+    (
+      (isRelativePeriodQuery(periodSpec) && requestedConceptIsStale) ||
+      (!isRelativePeriodQuery(periodSpec) && filtered.length === 0)
+    );
+
+  if (shouldAttemptExplicitFallback) {
+    const fallbackResult = await normalizeWithExplicitFallback(
+      cik,
+      ticker,
+      conceptUri,
+      conceptLabel,
+      periodSpec,
+      doc,
+      sub,
+      currentConceptScore,
+    );
+    if (fallbackResult) return fallbackResult;
+  }
 
   return {
     ticker, cik, concept: conceptUri, label: conceptLabel,
@@ -318,40 +434,10 @@ export async function normalizeWithAliasResolution(
   const doc = prefetchedDoc ?? await fetchCompanyFacts(cik);
   const tried: string[] = [];
 
-  // For annual period queries, prefer the concept whose most recent *annual period end* is latest.
-  // For quarterly/all queries, fall back to most recently filed fact (original behavior).
-  const isAnnualQuery = /last_\d+_years?/.test(periodSpec) || /^FY\d{4}$/.test(periodSpec);
-
-  // Collect all candidates with data, then pick the one with the most recent filing
-  const candidates: Array<{ conceptUri: string; latestFiled: number }> = [];
-  for (const conceptUri of concepts) {
-    tried.push(conceptUri);
-    const { namespace, tagName } = parseConceptUri(conceptUri);
-    const conceptData = doc.facts[namespace]?.[tagName];
-    if (!conceptData) continue;
-    const primaryUnit = selectPrimaryUnit(conceptData.units, conceptUri);
-    const rawFacts = conceptData.units[primaryUnit] ?? [];
-    if (rawFacts.length === 0) continue;
-    const latestFiled = Math.max(...rawFacts.map((f) => new Date(f.filed).getTime()));
-    // For annual queries, score by the latest annual period end date rather than filing date
-    const score = isAnnualQuery
-      ? (Math.max(
-          0,
-          ...rawFacts
-            .filter((f) => {
-              const days = f.start
-                ? Math.round((new Date(f.end).getTime() - new Date(f.start).getTime()) / 86_400_000)
-                : 0;
-              return days >= 350 && days <= 380;
-            })
-            .map((f) => new Date(f.end).getTime()),
-        ) || latestFiled)
-      : latestFiled;
-    candidates.push({ conceptUri, latestFiled: score });
-  }
+  for (const conceptUri of concepts) tried.push(conceptUri);
+  const candidates = rankAvailableConceptCandidates(doc, concepts, periodSpec);
 
   if (candidates.length > 0) {
-    candidates.sort((a, b) => b.latestFiled - a.latestFiled);
     const best = candidates[0]!;
     const result = await normalizeConceptFacts(
       cik,

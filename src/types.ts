@@ -98,6 +98,8 @@ export interface ToolOutput<T = EdgarFact> {
   facts:                   T[];
   freshness_as_of:         string;
   concept_aliases_checked: string[];
+  requested_concept?:      string;
+  resolved_from_deprecated_concept?: boolean;
   isError?:                boolean;
   error_message?:          string;
   staleness_warning?:      string;

@@ -21,9 +21,13 @@ const outputSchema = {
   cik:                     z.string(),
   concept:                 z.string(),
   label:                   z.string(),
+  requested_concept:       z.string().optional(),
+  resolved_from_deprecated_concept: z.boolean().optional(),
   facts:                   z.array(z.object({
     concept:          z.string(),
     label:            z.string(),
+    requested_concept: z.string().optional(),
+    resolved_from_deprecated_concept: z.boolean().optional(),
     period_label:     z.string(),
     period_type:      z.enum(["instant", "duration"]),
     start_date:       z.string().nullable(),
@@ -41,6 +45,7 @@ const outputSchema = {
   })),
   freshness_as_of:         z.string(),
   concept_aliases_checked: z.array(z.string()),
+  staleness_warning:       z.string().optional(),
   isError:                 z.boolean().optional(),
   error_message:           z.string().optional(),
 };
@@ -48,6 +53,8 @@ const outputSchema = {
 type GetFactsFact = EdgarFact & {
   concept: string;
   label: string;
+  requested_concept?: string;
+  resolved_from_deprecated_concept?: boolean;
 };
 
 type GetFactsOutput = ToolOutput<GetFactsFact>;
@@ -104,10 +111,21 @@ export const getFactsTool: McpTool<typeof inputSchema, typeof outputSchema> = {
             ...fact,
             concept: r.concept,
             label: r.label,
+            ...(r.requested_concept ? { requested_concept: r.requested_concept } : {}),
+            ...(r.resolved_from_deprecated_concept ? { resolved_from_deprecated_concept: true } : {}),
           })),
         ),
         freshness_as_of:         results[0]?.freshness_as_of ?? new Date().toISOString(),
         concept_aliases_checked: results.flatMap((r) => r.concept_aliases_checked),
+        ...(args.concepts.length === 1 && results[0]?.requested_concept
+          ? { requested_concept: results[0].requested_concept }
+          : {}),
+        ...(args.concepts.length === 1 && results[0]?.resolved_from_deprecated_concept
+          ? { resolved_from_deprecated_concept: true }
+          : {}),
+        ...(args.concepts.length === 1 && results[0]?.staleness_warning
+          ? { staleness_warning: results[0].staleness_warning }
+          : {}),
       };
 
       return {

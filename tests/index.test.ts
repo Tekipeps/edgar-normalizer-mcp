@@ -51,6 +51,21 @@ describe("get_facts", () => {
     expect(data.concept_aliases_checked.length).toBeGreaterThan(0);
   });
 
+  test("explicit stale revenue concept falls back with explicit metadata", async () => {
+    const result = await getFactsTool.handler(
+      { ticker: "AAPL", concepts: ["us-gaap/Revenues"], periods: "last_8_quarters" },
+      undefined,
+    );
+    const data = result.structuredContent as any;
+
+    expect(result.isError).toBeFalsy();
+    expect(data.requested_concept).toBe("us-gaap/Revenues");
+    expect(data.resolved_from_deprecated_concept).toBe(true);
+    expect(data.concept).toContain("RevenueFromContractWithCustomerExcludingAssessedTax");
+    expect([...new Set(data.facts.map((f: any) => f.period_label))]).toContain("Q4 FY2025");
+    expect(data.facts.every((f: any) => f.requested_concept === "us-gaap/Revenues")).toBe(true);
+  });
+
   test("multiple concepts", async () => {
     const result = await getFactsTool.handler(
       {
