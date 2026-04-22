@@ -96,40 +96,9 @@ function buildSourceUrl(cik: string, accn: string): string {
   return `https://www.sec.gov/Archives/edgar/data/${cik}/${noDashes}/${accn}-index.htm`;
 }
 
-// Determine scale from the `decimals` field.
-// EDGAR: decimals=-3 means values are in thousands; decimals=-6 in millions.
-// "INF" means exact (usually share counts).
-function resolveScale(raw: EdgarFactRaw[], unit: string): number {
-  // Sample up to 20 facts to determine consistent scale
-  const sample = raw.slice(0, 20);
-  const decimalsSample = sample
-    .map((f) => (f.decimals === "INF" ? 0 : typeof f.decimals === "number" ? f.decimals : 0))
-    .filter((d) => d !== 0);
-
-  if (decimalsSample.length > 0) {
-    // Use mode of decimals values
-    const counts = new Map<number, number>();
-    for (const d of decimalsSample) counts.set(d, (counts.get(d) ?? 0) + 1);
-    let modeDecimals = 0;
-    let maxCount = 0;
-    for (const [d, c] of counts) {
-      if (c > maxCount) { maxCount = c; modeDecimals = d; }
-    }
-    if (modeDecimals === -3) return 1_000;
-    if (modeDecimals === -6) return 1_000_000;
-    if (modeDecimals <= -9) return 1_000_000_000;
-    return 1;
-  }
-
-  // Heuristic fallback for USD values with no decimals field
-  if (unit === "USD") {
-    const values = raw.slice(0, 20).map((f) => Math.abs(f.val)).filter((v) => v > 0);
-    if (values.length === 0) return 1;
-    // Use average of sample instead of sorting full array
-    const avg = values.reduce((s, v) => s + v, 0) / values.length;
-    if (avg > 0 && avg < 1e8) return 1_000;
-  }
-
+// SEC companyfacts values are already reported at full magnitude.
+// Keep the response schema stable, but do not apply any rescaling.
+function resolveScale(_raw: EdgarFactRaw[], _unit: string): number {
   return 1;
 }
 
@@ -180,7 +149,7 @@ function deriveQ4Facts(allFacts: EdgarFact[], unit: string): EdgarFact[] {
       period_label:     `Q4 ${fyLabel}`,
       start_date:       nineM.end_date,
       value:            q4Val,
-      value_normalized: q4Val * annual.scale,
+      value_normalized: q4Val,
       is_derived:       true,
     });
   }
@@ -221,7 +190,7 @@ function deriveQ4SegmentFacts(allFacts: SegmentFact[], unit: string): SegmentFac
         period_label: `Q4 ${fyLabel}`,
         start_date: nineM.end_date,
         value: q4Val,
-        value_normalized: q4Val * annual.scale,
+        value_normalized: q4Val,
         is_derived: true,
       });
     }
@@ -333,7 +302,7 @@ export async function normalizeConceptFacts(
       value:            raw.val,
       unit:             primaryUnit,
       scale,
-      value_normalized: raw.val * scale,
+      value_normalized: raw.val,
       filing_type:      raw.form,
       accession_number: raw.accn,
       filed_date:       raw.filed,
@@ -522,7 +491,7 @@ export async function resolveConceptForTicker(
         period_label: periodLabel, period_type: periodType,
         start_date: mostRecent.start ?? null, end_date: mostRecent.end,
         value: mostRecent.val, unit: primaryUnit, scale,
-        value_normalized: mostRecent.val * scale,
+        value_normalized: mostRecent.val,
         filing_type: mostRecent.form, accession_number: mostRecent.accn,
         filed_date: mostRecent.filed, is_amendment: mostRecent.form.endsWith("/A"),
         source_url: buildSourceUrl(cik, mostRecent.accn),
@@ -665,7 +634,7 @@ export async function extractSegmentFacts(
           value: entry.val,
           unit: primaryUnit,
           scale,
-          value_normalized: entry.val * scale,
+          value_normalized: entry.val,
           filing_type: filing.form,
           accession_number: filing.accn,
           filed_date: filing.filedDate,
@@ -746,7 +715,7 @@ function discoverSegmentConcepts(
         unit: primaryUnit,
         periods_count: new Set(rawFacts.map((f) => f.end)).size,
         latest_period_end: latest.end,
-        latest_value_normalized: latest.val * scale,
+        latest_value_normalized: latest.val,
         has_segment_data: true,
       });
     }
@@ -813,7 +782,7 @@ export async function discoverXbrlConcepts(
         unit: primaryUnit,
         periods_count: periodSet.size,
         latest_period_end: latest.end,
-        latest_value_normalized: latest.val * scale,
+        latest_value_normalized: latest.val,
         has_segment_data: hasSegmentData,
       });
     }

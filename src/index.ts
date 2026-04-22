@@ -1,5 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { createContextMiddleware } from "@ctxprotocol/sdk";
 import express from "express";
 import { warmTickerCache, getTickerCacheLoadedAt } from "./data/edgar.ts";
 import { registerAllTools } from "./tools/index.ts";
@@ -32,8 +33,7 @@ app.get("/health", (_req, res) => {
 });
 
 // MCP endpoint
-// TODO: uncomment createContextMiddleware() before CTX deployment
-// import { createContextMiddleware } from "@ctxprotocol/sdk";
+app.use("/mcp", createContextMiddleware());
 app.post("/mcp", async (req, res) => {
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
   try {
