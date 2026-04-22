@@ -2,6 +2,7 @@ import { z } from "zod";
 import { resolveCikFromTicker } from "../data/edgar.ts";
 import { extractSegmentFacts } from "../lib/orchestrator.ts";
 import { withTimeout, type McpTool } from "../lib/tool-utils.ts";
+import { factProvenanceSchema } from "./provenance-schema.ts";
 import type { SegmentToolOutput } from "../types.ts";
 
 const inputSchema = {
@@ -50,6 +51,7 @@ const outputSchema = {
     filed_date:        z.string(),
     is_amendment:      z.boolean(),
     is_derived:        z.boolean().optional(),
+    provenance:        factProvenanceSchema,
     source_url:        z.string(),
     segment_dimension: z.string(),
     segment_member:    z.string(),

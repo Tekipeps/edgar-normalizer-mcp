@@ -2,6 +2,7 @@ import { z } from "zod";
 import { resolveCikFromTicker } from "../data/edgar.ts";
 import { compareConceptPeriods } from "../lib/orchestrator.ts";
 import { withTimeout, type McpTool } from "../lib/tool-utils.ts";
+import { factProvenanceSchema } from "./provenance-schema.ts";
 import type { ComparePeriodsOutput } from "../types.ts";
 
 const periodPoint = z.object({
@@ -11,6 +12,7 @@ const periodPoint = z.object({
   unit:             z.string(),
   filing_type:      z.string(),
   filed_date:       z.string(),
+  provenance:       factProvenanceSchema,
 }).nullable();
 
 const inputSchema = {

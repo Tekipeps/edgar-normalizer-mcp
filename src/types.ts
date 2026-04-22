@@ -70,6 +70,7 @@ export interface EdgarFact {
   filed_date:        string;
   is_amendment:      boolean;
   is_derived?:       boolean;   // true when value is computed from annual − 9-month YTD
+  provenance:        FactProvenance;
   source_url:        string;
 }
 
@@ -120,6 +121,7 @@ export interface BasketRow {
   filing_type:      string | null;
   filed_date:       string | null;
   is_amendment:     boolean | null;
+  provenance:       FactProvenance | null;
   source_url:       string | null;
   isError:          boolean;
   error_message?:   string;
@@ -172,7 +174,37 @@ export interface PeriodPoint {
   unit:             string;
   filing_type:      string;
   filed_date:       string;
+  provenance:       FactProvenance;
 }
+
+export interface ReportedFactProvenance {
+  type:             "reported";
+  filing_type:      string;
+  accession_number: string;
+  filed_date:       string;
+  source_url:       string;
+}
+
+export interface DerivedFactProvenance {
+  type:   "derived";
+  method: "annual_minus_nine_months";
+  annual_source: {
+    period_label:      string;
+    filing_type:       string;
+    accession_number:  string;
+    filed_date:        string;
+    source_url:        string;
+  };
+  subtracted_source: {
+    period_label:      string;
+    filing_type:       string;
+    accession_number:  string;
+    filed_date:        string;
+    source_url:        string;
+  };
+}
+
+export type FactProvenance = ReportedFactProvenance | DerivedFactProvenance;
 
 export interface ComparePeriodsOutput {
   ticker:                  string;

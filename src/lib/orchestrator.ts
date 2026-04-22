@@ -13,6 +13,7 @@ import { resolveConceptViaMercury } from "../synthesis/mercury.ts";
 import { buildPeriodLabel, filterByPeriodSpec, filterMultiByPeriodSpec, parseFiscalYearEnd } from "./period-spine.ts";
 import type {
   CompanyFactsDoc,
+  FactProvenance,
   EdgarFact,
   EdgarFactRaw,
   PeriodFilter,
@@ -96,6 +97,45 @@ function buildSourceUrl(cik: string, accn: string): string {
   return `https://www.sec.gov/Archives/edgar/data/${cik}/${noDashes}/${accn}-index.htm`;
 }
 
+function buildReportedFactProvenance(
+  filingType: string,
+  accessionNumber: string,
+  filedDate: string,
+  sourceUrl: string,
+): FactProvenance {
+  return {
+    type: "reported",
+    filing_type: filingType,
+    accession_number: accessionNumber,
+    filed_date: filedDate,
+    source_url: sourceUrl,
+  };
+}
+
+function buildDerivedFactProvenance(
+  annual: EdgarFact,
+  nineMonth: EdgarFact,
+): FactProvenance {
+  return {
+    type: "derived",
+    method: "annual_minus_nine_months",
+    annual_source: {
+      period_label: annual.period_label,
+      filing_type: annual.filing_type,
+      accession_number: annual.accession_number,
+      filed_date: annual.filed_date,
+      source_url: annual.source_url,
+    },
+    subtracted_source: {
+      period_label: nineMonth.period_label,
+      filing_type: nineMonth.filing_type,
+      accession_number: nineMonth.accession_number,
+      filed_date: nineMonth.filed_date,
+      source_url: nineMonth.source_url,
+    },
+  };
+}
+
 // SEC companyfacts values are already reported at full magnitude.
 // Keep the response schema stable, but do not apply any rescaling.
 function resolveScale(_raw: EdgarFactRaw[], _unit: string): number {
@@ -151,6 +191,7 @@ function deriveQ4Facts(allFacts: EdgarFact[], unit: string): EdgarFact[] {
       value:            q4Val,
       value_normalized: q4Val,
       is_derived:       true,
+      provenance:       buildDerivedFactProvenance(annual, nineM),
     });
   }
   return derived;
@@ -192,6 +233,7 @@ function deriveQ4SegmentFacts(allFacts: SegmentFact[], unit: string): SegmentFac
         value: q4Val,
         value_normalized: q4Val,
         is_derived: true,
+        provenance: buildDerivedFactProvenance(annual, nineM),
       });
     }
   }
@@ -293,6 +335,7 @@ export async function normalizeConceptFacts(
 
     const isAmendment = raw.form.endsWith("/A");
     const filedMs = new Date(raw.filed).getTime();
+    const sourceUrl = buildSourceUrl(cik, raw.accn);
 
     const fact: EdgarFact = {
       period_label:     periodLabel,
@@ -307,7 +350,8 @@ export async function normalizeConceptFacts(
       accession_number: raw.accn,
       filed_date:       raw.filed,
       is_amendment:     isAmendment,
-      source_url:       buildSourceUrl(cik, raw.accn),
+      provenance:       buildReportedFactProvenance(raw.form, raw.accn, raw.filed, sourceUrl),
+      source_url:       sourceUrl,
     };
 
     const existing = periodMap.get(periodLabel);
@@ -494,6 +538,12 @@ export async function resolveConceptForTicker(
         value_normalized: mostRecent.val,
         filing_type: mostRecent.form, accession_number: mostRecent.accn,
         filed_date: mostRecent.filed, is_amendment: mostRecent.form.endsWith("/A"),
+        provenance: buildReportedFactProvenance(
+          mostRecent.form,
+          mostRecent.accn,
+          mostRecent.filed,
+          buildSourceUrl(cik, mostRecent.accn),
+        ),
         source_url: buildSourceUrl(cik, mostRecent.accn),
       };
     }
@@ -626,6 +676,7 @@ export async function extractSegmentFacts(
         const { label: periodLabel, periodType } = buildPeriodLabel(
           entry.startDate, entry.endDate, fiscalYearEndMonth,
         );
+        const sourceUrl = buildSourceUrl(cik, filing.accn);
         xbrlSegmentFacts.push({
           period_label: periodLabel,
           period_type: periodType,
@@ -639,7 +690,13 @@ export async function extractSegmentFacts(
           accession_number: filing.accn,
           filed_date: filing.filedDate,
           is_amendment: filing.form.endsWith("/A"),
-          source_url: buildSourceUrl(cik, filing.accn),
+          provenance: buildReportedFactProvenance(
+            filing.form,
+            filing.accn,
+            filing.filedDate,
+            sourceUrl,
+          ),
+          source_url: sourceUrl,
           segment_dimension: axis,
           segment_member: entry.memberName,
         });
@@ -823,6 +880,7 @@ export async function compareConceptPeriods(
       unit: fact.unit,
       filing_type: fact.filing_type,
       filed_date: fact.filed_date,
+      provenance: fact.provenance,
     };
   };
 

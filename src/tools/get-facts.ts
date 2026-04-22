@@ -2,6 +2,7 @@ import { z } from "zod";
 import { resolveCikFromTicker, fetchCompanyFacts, fetchSubmissions } from "../data/edgar.ts";
 import { normalizeConceptFacts, normalizeWithAliasResolution } from "../lib/orchestrator.ts";
 import { withTimeout, type McpTool } from "../lib/tool-utils.ts";
+import { factProvenanceSchema } from "./provenance-schema.ts";
 import type { EdgarFact, ToolOutput } from "../types.ts";
 
 const inputSchema = {
@@ -41,6 +42,7 @@ const outputSchema = {
     filed_date:       z.string(),
     is_amendment:     z.boolean(),
     is_derived:       z.boolean().optional(),
+    provenance:       factProvenanceSchema,
     source_url:       z.string(),
   })),
   freshness_as_of:         z.string(),

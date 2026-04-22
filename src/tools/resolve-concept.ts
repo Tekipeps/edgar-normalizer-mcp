@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { resolveConceptForTicker } from "../lib/orchestrator.ts";
 import { withTimeout, type McpTool } from "../lib/tool-utils.ts";
+import { factProvenanceSchema } from "./provenance-schema.ts";
 import type { ConceptResolution } from "../types.ts";
 
 const inputSchema = {
@@ -32,6 +33,7 @@ const outputSchema = {
     accession_number: z.string(),
     filed_date:       z.string(),
     is_amendment:     z.boolean(),
+    provenance:       factProvenanceSchema,
     source_url:       z.string(),
   }).nullable().optional(),
   suggestions:        z.array(z.string()).optional(),

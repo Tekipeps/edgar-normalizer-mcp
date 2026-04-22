@@ -21,6 +21,13 @@ function makeFact(overrides: Partial<EdgarFact> & { period_label: string; end_da
     accession_number: "0001234567-24-000001",
     filed_date: "2024-01-01",
     is_amendment: false,
+    provenance: {
+      type: "reported",
+      filing_type: "10-Q",
+      accession_number: "0001234567-24-000001",
+      filed_date: "2024-01-01",
+      source_url: "https://example.com",
+    },
     source_url: "https://example.com",
     ...overrides,
   };

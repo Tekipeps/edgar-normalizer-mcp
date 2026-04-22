@@ -5,6 +5,7 @@ import {
   normalizeWithAliasResolution,
 } from "../lib/orchestrator.ts";
 import { withTimeout, type McpTool } from "../lib/tool-utils.ts";
+import { factProvenanceSchema } from "./provenance-schema.ts";
 import type { BasketOutput, BasketRow } from "../types.ts";
 
 const inputSchema = {
@@ -43,6 +44,7 @@ const outputSchema = {
       filing_type: z.string().nullable(),
       filed_date: z.string().nullable(),
       is_amendment: z.boolean().nullable(),
+      provenance: factProvenanceSchema.nullable(),
       source_url: z.string().nullable(),
       isError: z.boolean(),
       error_message: z.string().optional(),
@@ -87,6 +89,7 @@ async function processBatch(
         filing_type: fact?.filing_type ?? null,
         filed_date: fact?.filed_date ?? null,
         is_amendment: fact?.is_amendment ?? null,
+        provenance: fact?.provenance ?? null,
         source_url: fact?.source_url ?? null,
         isError: false,
       };
@@ -102,6 +105,7 @@ async function processBatch(
         filing_type: null,
         filed_date: null,
         is_amendment: null,
+        provenance: null,
         source_url: null,
         isError: true,
         error_message: msg,
